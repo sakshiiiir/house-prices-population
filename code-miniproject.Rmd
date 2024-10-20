@@ -1,0 +1,555 @@
+---
+title: "EDA-MiniProject"
+output: html_document
+date: "2023-10-01"
+---
+
+EDA- Mini Project
+
+```{r}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(lubridate)
+library(MASS)
+```
+
+```{r}
+#read data
+house_data <- read_xls("data/State_and_US_SA.xls", skip = 5)
+state_info <- read.csv("data/state_abbrevs.txt", header = TRUE, sep=" ")
+#eliminate the unnecassary columns
+house_data <- house_data[1:540,]
+#change the dtype of the 1st column from char to double
+house_data$AK = as.double(house_data$AK)
+
+#create a longer df
+house.df <- house_data |>
+  pivot_longer(names_to = 'State', values_to = "House Prices", AK:WY)
+```
+
+```{r}
+#create a new df for seasonally adjusted United States values.
+us.df <- house.df
+#drop a column
+drops = c("United States seasonally adjusted")
+house.df <- house.df[ , !(names(house.df) %in% drops)]
+```
+
+```{r}
+#load cpi
+cpi.data <- read.csv("data/cpi.csv")
+#combine year and period column
+cpi.data$Month  <- paste(cpi.data$Year, cpi.data$Period, sep = "")
+#create  new df for cp with only the required columns
+keep = c("Month", "Year", "Value")
+cpi.data <- cpi.data[ , (names(cpi.data) %in% keep)]
+#combine price and cpi data
+house.df <- house.df |>
+  left_join(cpi.data , by = c("Month"))
+```
+
+```{r}
+#house prices relative to cpi
+house.df$price_relative_cpi <- house.df$`House Prices` / house.df$Value
+summary(house.df)
+```
+
+
+```{r}
+#find mean price for each year
+mean_values <- house.df %>%
+  group_by(Year) %>%
+  summarise(Mean_Value = mean(price_relative_cpi, na.rm = TRUE))
+```
+
+How have house prices in the U.S changed from 1975 to 2019, after adjusting for inflation, i.e. relative to the CPI?
+
+```{r}
+ggplot(data = mean_values, aes(x = Year, y = Mean_Value)) +
+  geom_line(color="forestgreen") +
+  labs(title = "Inflation-Adjusted House Prices in the U.S. (1975-2019)", x = "Year", y = "Inflation-Adjusted Price") 
+```
+  
+How have changes in prices varied by state? 
+
+```{r}
+#find mean price for year 2019
+house.df.2019 <- house.df |>
+  group_by(State)|>
+  summarise(relative.price.2019 = mean(price_relative_cpi[Year == 2019]))
+
+#find mean price for year 1975
+house.df.1975 <- house.df |>
+  group_by(State)|>
+  summarise(relative.price.1975 = mean(price_relative_cpi[Year == 1975]))
+
+#join df for year 1975 and 2019
+new.house.df <- full_join(house.df.2019, house.df.1975, by = "State") 
+
+#change column
+new.house.df$change <- new.house.df$relative.price.2019 - new.house.df$relative.price.1975
+
+new.house <- merge(new.house.df, state_info, by.x = "State", by.y = "Code", all.x = TRUE)
+```
+
+
+```{r}
+new.house <- arrange(new.house, desc(change))
+# Identify states with the biggest increases and decreases in real house prices
+top_increases <- head(new.house, n = 5)
+top_decreases <- tail(new.house, n = 5)
+
+# Plot the states with the biggest increases and decreases
+ggplot(new.house, aes(y = reorder(State, change), x = change)) +
+  geom_bar(stat = "identity", fill = "skyblue", width = 0.7) +
+  coord_flip() +
+  labs(title = "Change in House Prices by State (1975-2019)",
+       y = "State",
+       x = "Change in House Price") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 6))
+```
+
+Which states have seen the biggest increases in real house prices, and which have seen the biggest decreases?
+
+#biggest increase in real house price.
+```{r}
+# Print the top states with the biggest increases and decreases
+cat("States with the biggest increases in real house prices:")
+print(top_increases)
+```
+
+Plotting the relative Price with year for the state with highest increase i.e. DC .
+
+```{r}
+#taking the mean of price over a year
+# Filter the data for DC state
+dc_data <- house.df %>% filter(State == "DC")
+
+dc_data <- dc_data |>
+  group_by(Year) |>
+  summarise(mean.price = mean(price_relative_cpi))
+ 
+# Create a line plot for the year-on-year trend
+ggplot(dc_data, aes(x = Year, y = mean.price)) +
+  geom_line(color="forestgreen") +
+  labs(x = "Year", y = "Price Relative to 1975 (CPI-adjusted)",
+       title = "Price Change Trend for DC State (1975-2019)") 
+
+```
+##biggest decrease in real house price. 
+```{r}
+top_decreases <- top_decreases |>
+  arrange(change)
+
+print("\nStates with the biggest decreases in real house prices:\n")
+print(top_decreases)
+```
+
+Plotting the relative Price with year for the state with the highest decrease.
+
+```{r}
+# Filter the data for WV state
+#taking the mean of price over a year
+wv_data <- house.df %>% filter(State == "WV")
+
+wv_data <- wv_data |>
+  group_by(Year) |>
+  summarise(mean.price = mean(price_relative_cpi))
+ 
+# Create a line plot for the year-on-year trend
+ggplot(wv_data, aes(x = Year, y = mean.price)) +
+  geom_line(color="forestgreen") +
+  labs(x = "Year", y = "Price Relative to 1975 (CPI-adjusted)",
+       title = "Price Change Trend for WV State (1975-2019)") 
+```
+
+Have changes in prices within each state mostly followed the same basic pattern, and are there outliers to that pattern?
+
+```{r}
+house_data <- house_data %>%
+  separate(Month, into = c("Year", "Month"), sep = "M")
+```
+
+```{r}
+columns <- colnames(house_data)[3:53]
+# Function to calculate means for specific years and states
+state_means <- house_data %>%
+    #filter(Year %in% years) %>%
+    group_by(Year) %>%
+    summarise(across(all_of(columns), mean, na.rm = TRUE))
+state_means$Year <- as.integer(state_means$Year)
+```
+
+```{r}
+data_long <- tidyr::gather(state_means, State, Value, -Year)
+# Create plots to visualize price changes within each state
+ggplot(data_long, aes(x = Year, y = Value, color = State)) + geom_line() +
+  facet_wrap(~State, scales = "free_x", nrow= 4)+  
+  labs(title = "Change in Real House Prices Over Time by State (1975-2019)", x = "Year (1975-2019)", y = "Change in House Prices") +
+  scale_x_continuous(breaks = NULL) +  
+  scale_color_viridis_d() 
+
+```
+Are there outliers to that pattern?
+
+We can that the trend for DC state is more increasing. Also, for state HI, we can a large increasing slope, as compared to the increasing trend of other states. These two states have a higher relative house price for 2019, reaching almost 300 or above.
+
+Do the typical patterns vary between the four regions (Northeast,Midwest, South, and West)?
+
+```{r}
+data_long <- merge(data_long, state_info, by.x = "State", by.y = "Code", all.x = TRUE)
+```
+
+```{r}
+# Create box plots to compare price changes by region
+ggplot(data_long, aes(x = Year, y = Value, color = Region)) +
+  geom_smooth() +
+  facet_wrap(~Region, scales = "free") +
+  labs(title = "Change in Real House Prices with Time (1975-2019)",
+       subtitle = "Divided by Region",
+       x = "Year",
+       y = "House Prices",
+       fill = "Region") +
+  theme_minimal() +
+  scale_color_manual(values = c("Northeast" = "orange", "Midwest" = "skyblue", "South" = "forestgreen", "West" = "purple"))
+```
+
+For all the regions, across the years the of 1975 to 2019, we can see an increasing trend of relative house prices.
+
+#Q2
+
+```{r}
+nhis.data <- read.csv("data/nhgis0003_ts_nominal_state.csv")
+
+columns_to_remove <- c("GISJOIN", "STATEFP", "NAME","STATENH")
+nhis.data <- nhis.data[, !names(nhis.data) %in% columns_to_remove]
+nhis.data <- nhis.data |>
+  rename(Population = A00AA)
+
+
+state_abbr <- state_info[, 1:2]
+
+nhis.data <- left_join(nhis.data, state_abbr, by= c("STATE"="State"))
+```
+
+```{r}
+nhis.data <- nhis.data |>
+  rename(State = Code, Year = YEAR)
+
+drops = c("STATE")
+nhis.data <- nhis.data[, !(names(nhis.data) %in% drops)]
+```
+
+```{r}
+population.price.df <- full_join( house.df, nhis.data , by = c('State'='State','Year'='Year'))
+```
+
+
+```{r}
+#read density of states of year 2019
+density.df <- read.table('data/censuspop2019.txt', header = TRUE)
+
+#remove Puerto Rico from data
+density.df <- density.df[density.df$NAME!="Puerto Rico",]
+
+#merge with state abbr 
+density.df <- left_join(density.df, state_abbr, by= c("NAME"="State"))
+
+```
+
+
+```{r}
+#find population density for 2019
+population <- density.df[density.df$variable == "POP",]
+density <- density.df[density.df$variable == "DENSITY",]
+
+#create a dataframe with state abbr and the population density
+pop.density.df <- data.frame(
+  State = density.df$Code[1:51],
+  Population.Density.2019 = density$value
+)
+
+#merge df with change in house price relative to cpi  from 1975 to 2019 and population density of 2019
+price.pop.density <- full_join(new.house.df , pop.density.df , by = "State")
+```
+
+
+Does present-day population density explain changes in house prices by state from 1975 to 2019? 
+
+
+
+```{r}
+#scatterplot of present day population density and change in real house price across US
+ggplot(price.pop.density , aes(x = Population.Density.2019, y = change, color = State)) + 
+  geom_point() + 
+  geom_smooth(method = lm, color = "black") +
+  theme_minimal() + 
+  labs(title = "Plot of population density and change across US states", x = "Population Density 2019", y = "Change in House Prices from 1975 to 2019")
+  
+```
+
+Since there is an outlier here, we cannot really explore the relationship between population density 2019 and change in house prices. let's explore by removing the outlier. 
+
+
+
+```{r} 
+#Boxplots comparing price change distributions between high and low density states.
+
+median_density <- median(price.pop.density$Population.Density.2019)
+price.pop.density$DensityCategory <- ifelse(price.pop.density$Population.Density.2019 > median_density, "High Density", "Low Density")
+
+#create boxplots comparing price change distributions
+
+ggplot(price.pop.density, aes(x = DensityCategory, y = change)) +
+geom_boxplot() +
+labs(title = "Price Change Distributions in High vs. Low Density States",
+       x = "Density Category",
+       y = "Price Change")
+```
+
+#Are there outliers to the relationship, and if so, is there a principled reason to drop them? 
+
+As we can see from the plot above, DC is an outlier with a high population density in 2019 and a high house price change. In order to explore the relationship between population density in 2019 and changes in house price, let's remove the outlier.
+
+#What does the relationship look like after dropping or downweighting outliers? 
+
+```{r, warning = FALSE}
+#removing state DC
+p <- price.pop.density |>
+  filter(State != "DC") 
+
+ggplot(p , aes(x = Population.Density.2019, y = change)) +
+geom_point() +
+  scale_y_log10() + scale_x_log10() +
+geom_smooth(method = "lm") +
+labs(title = "Plot of population density and change in real house price across US", x = "Population Density 2019", y = "Change in house price")
+```
+
+We can say that with the increase in population density in 2019, the change in house prices across the states increases.
+
+Let's fit an linear model to the change in house prices and population density 2019.
+
+```{r}
+#before removing DC
+#fitting lm model
+lm.df1 <- lm( change ~ Population.Density.2019 , data = price.pop.density)
+summary(lm.df1)
+```
+
+
+```{r}
+#after removing DC
+#fitting lm model
+lm.df2 <- lm( change ~ Population.Density.2019 , data = p)
+summary(lm.df2)
+```
+
+#Does the relationship vary by region? If so, how.
+
+```{r}
+#combine the state region dataframe with dataframe price population density 2019
+price.pop.density.region <- full_join(price.pop.density , state_info, by = c("State" =  "Code"))
+```
+
+```{r}
+# Create box plots to compare price changes by region
+ggplot(price.pop.density.region, aes(x = Population.Density.2019 , y = change, color = Region)) +
+  geom_smooth(method = "lm") +
+  facet_wrap(~Region, scales = "free") +
+  labs(title = "House Price Change Vs Population Density 2019 by Region",
+       x = "Price Population Density 2019",
+       y = "Change in House Prices",
+       fill = "Region") +
+  theme_minimal() +
+  scale_color_manual(values = c("Northeast" = "orange", "Midwest" = "skyblue", "South" = "forestgreen", "West" = "purple"))
+
+```
+Overall, relationship between change in house prices and population density in 2019 varies by region. Except MidWest, for all regions, with the increase in population density the change in house prices increases. For West and South, the increase is higher as compared to Northeast. Whereas, for MidWest, the relationship seems negative.
+
+
+#Q3
+Is there a relationship between changes in population and changes in house prices? To answer this, look at changes in each state over three time periods: 1990 to 2000, 2000 to 2010, and 2010 to 2019. Analyze the three time periods separately. Has the relationship changed over the three time periods? Are there variations by region?
+
+#1. 1990 to 2000
+
+```{r, warning=FALSE}
+nhis.data.1990.2000 <- nhis.data |>
+  group_by(State) |>
+  summarise(change.pop = Population[Year == 2000] - Population[Year == 1990])
+```
+
+```{r}
+house.df.1990.2000 <- house.df |>
+  filter(Year == c(1990, 2000)) |>
+  group_by(State) |>
+  summarise(change.house.price = mean(price_relative_cpi[Year == 2000]) - mean(price_relative_cpi[Year == 1990]))
+```
+
+```{r}
+df.1990.2000 <- full_join(house.df.1990.2000 , nhis.data.1990.2000 , by = "State")
+```
+
+```{r, warning = FALSE}
+ggplot(df.1990.2000, aes(y = change.house.price, x = change.pop)) +
+geom_point() + 
+  scale_x_log10() + scale_y_log10() +
+geom_smooth(method = "lm") + 
+labs(title = "Relationship Between log of Changes in Population and log of House Prices",
+     subtitle = "For 1990 - 2000",
+       y = "Log of Change in House Prices",
+       x = "Log of Change in Population")
+```
+
+From 1990 to 2000, we cannot really say there is any significant increasing relationship between change in house prices and change in population.
+
+Let's see if the relationship varies by region.
+
+```{r}
+#combine the state region dataframe with dataframe price population density 2019
+df.1990.2000.region <- full_join(df.1990.2000 , state_info, by = c("State" =  "Code"))
+```
+
+```{r}
+#region wise plots
+ggplot(df.1990.2000.region, aes(x = change.pop , y = change.house.price, color = Region)) +
+  geom_smooth(method = "lm") +
+  facet_wrap(~Region, scales = "free") +
+  labs(title = "Change in Population and Change in House Price by Region",
+       subtitle = "For 1990 - 2000",
+       x = "Change in Population 1990-2000",
+       y = "Change in House Prices 1990-2000",
+       fill = "Region") +
+  theme_minimal() +
+  scale_color_manual(values = c("Northeast" = "orange", "Midwest" = "skyblue", "South" = "forestgreen", "West" = "purple"))
+
+```
+
+During 1990 to 2000, for regions of Northeast and South, with the increase in change in population , the change in house prices increases. Whereas, for west the relation is slightly negative and for midwest, the relation seems neutral.
+
+#2000 to 2010
+
+```{r, warning = FALSE}
+nhis.data.2000.2010 <- nhis.data |>
+  group_by(State) |>
+  summarise(change.pop = Population[Year == 2010] - Population[Year == 2000])
+```
+```{r}
+house.df.2000.2010 <- house.df |>
+  filter(Year == c(2000, 2010)) |>
+  group_by(State) |>
+  summarise(change.house.price = mean(price_relative_cpi[Year == 2010]) - mean(price_relative_cpi[Year == 2000]))
+```
+
+```{r}
+df.2000.2010 <- full_join(house.df.2000.2010 , nhis.data.2000.2010 , by = "State")
+```
+
+```{r, warning = FALSE}
+ggplot(df.2000.2010, aes(y = change.house.price, x = change.pop)) +
+geom_point() + 
+  scale_x_log10() + scale_y_log10() + 
+geom_smooth(method = "lm") + 
+labs(title = "Relationship Between log of Changes in Population and log of House Prices",
+     subtitle = "For 2000 - 2010",
+       y = "Log of Change in House Prices",
+       x = "Log of Change in Population")
+```
+
+For 2000 to 2010, We can see that the log of change in population as it increases the log of change in hoouse prices decreases, an inverse relationship.
+
+```{r}
+#combine the state region dataframe with dataframe price population density 2019
+df.2000.2010.region <- full_join(df.2000.2010 , state_info, by = c("State" =  "Code"))
+```
+
+```{r}
+#region wise plots
+ggplot(df.2000.2010.region, aes(x = change.pop , y = change.house.price, color = Region)) +
+  geom_smooth(method = "lm") +
+  facet_wrap(~Region, scales = "free") +
+  labs(title = "Change in Population and Change in House Price by Region",
+       subtitle = "For 2000 - 2010",
+       x = "Change in Population 2000-2010",
+       y = "Change in House Prices 2000-2010",
+       fill = "Region") +
+  theme_minimal() +
+  scale_color_manual(values = c("Northeast" = "orange", "Midwest" = "skyblue", "South" = "forestgreen", "West" = "purple"))
+
+```
+During 2000 to 2010, for regions of northeast, the relationship between change in house price and change in population, is increasing. For south and west, the relationship is decreasing. And for midwest, the relationship is kind of neutral.
+
+#2010 to 2019
+
+```{r}
+#take the population of 2010
+nhis.data.2010.2019 <- nhis.data |>
+  group_by(State) |>
+  summarise(pop.2010 = Population[Year == 2010])
+```
+
+```{r}
+#combine it with the population with 2019
+nhis.data.2010.2019 <- left_join(nhis.data.2010.2019 , population, by = c("State" = ("Code")) )
+
+#find the change in population 2019 and 2010.
+nhis.data.2010.2019$change.pop = nhis.data.2010.2019$value - nhis.data.2010.2019$pop.2010
+
+#drop the unecessary columns.
+drop <- c("pop.2010", "NAME", "GEOID", "variable", "value")
+nhis.data.2010.2019 <- nhis.data.2010.2019[,!(names(nhis.data.2010.2019)%in%drop)]
+```
+
+```{r}
+house.df.2010.2019 <- house.df |>
+  filter(Year == c(2010, 2019)) |>
+  group_by(State) |>
+  summarise(change.house.price = mean(price_relative_cpi[Year == 2019]) - mean(price_relative_cpi[Year == 2010]))
+
+
+df.2010.2019 <- full_join(house.df.2010.2019 , nhis.data.2010.2019 , by = "State")
+```
+
+
+```{r, warning = FALSE}
+ggplot(df.2010.2019, aes(y = change.house.price, x = change.pop)) +
+geom_point() + 
+  scale_x_log10() + 
+geom_smooth(method = "lm") + 
+labs(title = "Relationship Between Log of Changes in Population and Change of House Prices",
+     subtitle = "For 2010 - 2019",
+       y = "Change in House Prices",
+       x = "Log of Change in Population")
+```
+For 2010 to 2019, we can say the with the increase in change in population and change in house prices.
+
+```{r}
+#combine the state region dataframe with dataframe price population density 2019
+df.2010.2019.region <- full_join(df.2010.2019 , state_info, by = c("State" =  "Code"))
+```
+
+```{r, warning = FALSE}
+#region wise plots
+ggplot(df.2010.2019.region, aes(x = change.pop , y = change.house.price, color = Region)) +
+  geom_smooth(method = "lm") +
+  facet_wrap(~Region, scales = "free") +
+  labs(title = "Change in Population and Change in House Price by Region",
+       subtitle = "For 2010 - 2019",
+       x = "Change in Population 2010-2019",
+       y = "Change in House Prices 2010-2019",
+       fill = "Region") +
+  theme_minimal() +
+  scale_color_manual(values = c("Northeast" = "orange", "Midwest" = "skyblue", "South" = "forestgreen", "West" = "purple"))
+```
+
+For 2010 to 2019, we can that the for all the four regions, the change in population and change in house prices have an increasing linear relationship.
+ 
+ 
+
+
+
+
